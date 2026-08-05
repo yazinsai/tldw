@@ -230,10 +230,19 @@ function injectWatchSummarizeButton() {
 
   btn.dataset.videoId = currentVideoId;
 
-  if (mount.after) {
-    mount.after.insertAdjacentElement('afterend', btn);
-  } else {
-    mount.parent.insertBefore(btn, mount.before);
+  // Only reposition the button when it is not already sitting where it belongs.
+  // Moving it unconditionally triggers a mutation on YouTube's container that
+  // the feed observer misreads as a page change, causing a re-entrant loop.
+  const alreadyPlaced = mount.after
+    ? mount.after.nextElementSibling === btn
+    : mount.before && mount.before.previousElementSibling === btn;
+
+  if (!alreadyPlaced) {
+    if (mount.after) {
+      mount.after.insertAdjacentElement('afterend', btn);
+    } else {
+      mount.parent.insertBefore(btn, mount.before);
+    }
   }
 
   updateSummarizeButtonStates();
@@ -526,7 +535,12 @@ function enhanceFeedCards() {
 
   ensureFeedPillPortal();
   updateSummarizeButtonStates();
-  if (currentVideoId) injectWatchSummarizeButton();
+  // Only re-inject the watch-page button when YouTube has torn it down
+  // (e.g. after a SPA re-render).  Moving it on every feed-card scan is
+  // what causes the flicker the user sees on hover.
+  if (currentVideoId && !document.getElementById('tldw-watch-summarize-btn')) {
+    injectWatchSummarizeButton();
+  }
 }
 
 function markFeedCardEnhanced(card) {
@@ -848,17 +862,30 @@ function updateSummarizeButtonStates() {
   });
 }
 
+const TLDW_OWNED_SELECTORS = [
+  '.tldw-feed-pill',
+  '#tldw-watch-summarize-btn',
+  '#tldw-summary-queue-widget',
+  '#tldw-highlight-chip'
+].join(',');
+
 function isTldwOwnedMutation(mutation) {
+  // Check added/removed nodes — when we inject or move our button the
+  // mutation.target is YouTube's own container so we must inspect the payload.
+  const affected = [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])];
+  if (affected.some(node => {
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    return node.matches?.(TLDW_OWNED_SELECTORS) ||
+           !!node.querySelector?.(TLDW_OWNED_SELECTORS);
+  })) {
+    return true;
+  }
+
   const target = mutation.target?.nodeType === Node.ELEMENT_NODE
     ? mutation.target
     : mutation.target?.parentElement;
 
-  return !!target?.closest([
-    '.tldw-feed-pill',
-    '#tldw-watch-summarize-btn',
-    '#tldw-summary-queue-widget',
-    '#tldw-highlight-chip'
-  ].join(','));
+  return !!target?.closest(TLDW_OWNED_SELECTORS);
 }
 
 function injectSummaryQueueWidget() {
